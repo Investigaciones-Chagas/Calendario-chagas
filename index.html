@@ -206,7 +206,23 @@ main{display:flex;padding:15px 20px;gap:20px;max-width:1700px;margin:0 auto;alig
 </div>
 </div>
 <input type="file" id="fileImport" style="display:none" onchange="processImportJSON(event)">
-<script>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAqB9xPzl1n-7xITQjk27csBuhGeZqQ6Dc",
+  authDomain: "chagas-paracotos-2026-2027.firebaseapp.com",
+  projectId: "chagas-paracotos-2026-2027",
+  storageBucket: "chagas-paracotos-2026-2027.firebasestorage.app",
+  messagingSenderId: "83824810791",
+  appId: "1:83824810791:web:c1dd258be923be7cc3a702"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
 const statusColors={'Pendiente':'#FBC02D','Avanzando':'#5FB4E5','Urgente':'#FF9800','Prioritario':'#E84A8A','Terminado':'#5C9E31'};
 let currentDate=new Date(2026,9,1,12,0,0);
 let selectedDate=new Date(2026,9,1,12,0,0);
@@ -217,17 +233,28 @@ let exchangeRates={};
 let editingId=null;
 
 function loadLocalData(){
-    const sa=localStorage.getItem('chagas_activities');if(sa)activities=JSON.parse(sa);
-    const sl=localStorage.getItem('chagas_logistics');if(sl)logistics=JSON.parse(sl);
-    const se=localStorage.getItem('chagas_expenses');if(se)expenses=JSON.parse(se);
-    const sr=localStorage.getItem('chagas_rates');if(sr)exchangeRates=JSON.parse(sr);
+    onSnapshot(collection(db, "actividades"), (snapshot) => {
+        activities = [];
+        snapshot.forEach(d => { activities.push({ id: d.id, ...d.data() }); });
+        renderCalendar(); renderSidebarActivities(); updateTotalsPanel();
+    });
+    onSnapshot(collection(db, "logistica"), (snapshot) => {
+        logistics = {};
+        snapshot.forEach(d => { logistics[d.id] = d.data().items; });
+        renderLogistics(); renderCalendar();
+    });
+    onSnapshot(collection(db, "gastos"), (snapshot) => {
+        expenses = {};
+        snapshot.forEach(d => { expenses[d.id] = d.data().items; });
+        renderDailyExpenses(); renderCalendar(); updateTotalsPanel();
+    });
+    onSnapshot(collection(db, "tasas"), (snapshot) => {
+        exchangeRates = {};
+        snapshot.forEach(d => { exchangeRates[d.id] = d.data().valor; });
+        updateSelectedDayDisplay(); renderCalendar();
+    });
 }
-function saveLocalData(){
-    localStorage.setItem('chagas_activities',JSON.stringify(activities));
-    localStorage.setItem('chagas_logistics',JSON.stringify(logistics));
-    localStorage.setItem('chagas_expenses',JSON.stringify(expenses));
-    localStorage.setItem('chagas_rates',JSON.stringify(exchangeRates));
-}
+
 function getDateStr(date){
     const y=date.getFullYear();
     const m=String(date.getMonth()+1).padStart(2,'0');
@@ -246,9 +273,12 @@ function saveDailyRate(){
     const dateStr=getDateStr(selectedDate);
     const mode=document.getElementById('rateMode').value;
     const iv=document.getElementById('localExchangeRate').value;
-    if(mode==='sin_tasa'||iv.trim()===''){exchangeRates[dateStr]=null;}
-    else{const v=parseFloat(iv);exchangeRates[dateStr]=(isNaN(v)||v<=0)?null:v;}
-    saveLocalData();renderCalendar();updateTotalsPanel();updateCalcPreview();
+    let valorGuardar = null;
+    if(mode!=='sin_tasa' && iv.trim()!==''){
+        const v=parseFloat(iv);
+        if(!isNaN(v) && v>0) valorGuardar = v;
+    }
+    setDoc(doc(db, "tasas", dateStr), { valor: valorGuardar });
 }
 function toggleRateInput() {
     const mode = document.getElementById('rateMode').value;
@@ -337,11 +367,17 @@ function addLogisticItem(){
     const text=input.value.trim();
     if(!text){alert('Escribe el material o recurso necesario.');return;}
     const dateStr=getDateStr(selectedDate);
-    if(!logistics[dateStr]){logistics[dateStr]=[];}
-    logistics[dateStr].push(text);
-    input.value='';saveLocalData();renderLogistics();renderCalendar();
+    let currentItems = logistics[dateStr] || [];
+    currentItems.push(text);
+    setDoc(doc(db, "logistica", dateStr), { items: currentItems });
+    input.value='';
 }
-function removeLogisticItem(index){const dateStr=getDateStr(selectedDate);logistics[dateStr].splice(index,1);saveLocalData();renderLogistics();renderCalendar();}
+function removeLogisticItem(index){
+    const dateStr=getDateStr(selectedDate);
+    let currentItems = logistics[dateStr] || [];
+    currentItems.splice(index,1);
+    setDoc(doc(db, "logistica", dateStr), { items: currentItems });
+}
 function renderLogistics(){
     const list=document.getElementById('logisticsList');
     const items=logistics[getDateStr(selectedDate)]||[];
@@ -389,10 +425,21 @@ function saveActivity(){
     const rateUsed=parseFloat(document.getElementById('actRate').value)||getDailyRate(getDateStr(selectedDate))||0;
     const newAct={id:editingId?String(editingId):Date.now().toString(),type:document.getElementById('actType').value,name:name,responsible:document.getElementById('actResponsible').value.trim(),notes:document.getElementById('actNotes').value.trim(),status:document.getElementById('actStatus').value,budgetBs:parseFloat(document.getElementById('actBudgetBs').value)||0,budgetUsd:parseFloat(document.getElementById('actBudgetUsd').value)||0,realBs:parseFloat(document.getElementById('actRealBs').value)||0,realUsd:parseFloat(document.getElementById('actRealUsd').value)||0,rateUsed:rateUsed,date:getDateStr(selectedDate)};
     if(newAct.type==='Proceso'){newAct.startDate=document.getElementById('actStartDate').value;newAct.endDate=document.getElementById('actEndDate').value;if(!newAct.startDate||!newAct.endDate)return alert('Faltan fechas del proceso');}
-    if(editingId)activities=activities.map(a=>String(a.id)===String(editingId)?newAct:a);else activities.push(newAct);
-    saveLocalData();closeActivityModal();renderCalendar();renderSidebarActivities();updateTotalsPanel();
+    
+    setDoc(doc(db, "actividades", newAct.id), newAct).then(() => {
+        closeActivityModal();
+    }).catch((error) => {
+        alert("Error al guardar en la nube: " + error.message);
+    });
 }
-function deleteActivity(){if(!editingId)return;if(confirm('¿Eliminar esta actividad?')){activities=activities.filter(a=>String(a.id)!==String(editingId));saveLocalData();closeActivityModal();renderCalendar();renderSidebarActivities();updateTotalsPanel();}}
+function deleteActivity(){
+    if(!editingId)return;
+    if(confirm('¿Eliminar esta actividad?')){
+        deleteDoc(doc(db, "actividades", String(editingId))).then(() => {
+            closeActivityModal();
+        });
+    }
+}
 
 function addManualExpense(){
     const desc=document.getElementById('expenseDesc').value.trim();
@@ -401,15 +448,24 @@ function addManualExpense(){
     const dateStr=getDateStr(selectedDate);
     const rateUsed=getDailyRate(dateStr)||0;
     if(!desc||!inputVal)return alert('Ingresa un concepto y un monto válido');
-    if(!expenses[dateStr])expenses[dateStr]=[];
+    
+    let currentExpenses = expenses[dateStr] || [];
     let amountBs=0, amountUsd=0;
     if(curr==='BS'){amountBs=inputVal;amountUsd=rateUsed>0?(inputVal/rateUsed):0;}
     else{amountUsd=inputVal;amountBs=rateUsed>0?(inputVal*rateUsed):0;}
-    expenses[dateStr].push({desc,amountBs,amountUsd,rateUsed});
+    
+    currentExpenses.push({desc,amountBs,amountUsd,rateUsed});
+    setDoc(doc(db, "gastos", dateStr), { items: currentExpenses });
+    
     document.getElementById('expenseDesc').value='';document.getElementById('expenseInputVal').value='';
-    updateCalcPreview();saveLocalData();renderCalendar();renderDailyExpenses();updateTotalsPanel();
+    updateCalcPreview();
 }
-function removeExpenseItem(index){const dateStr=getDateStr(selectedDate);if(expenses[dateStr]){expenses[dateStr].splice(index,1);saveLocalData();renderCalendar();renderDailyExpenses();updateTotalsPanel();}}
+function removeExpenseItem(index){
+    const dateStr=getDateStr(selectedDate);
+    let currentExpenses = expenses[dateStr] || [];
+    currentExpenses.splice(index,1);
+    setDoc(doc(db, "gastos", dateStr), { items: currentExpenses });
+}
 function renderDailyExpenses(){
     const container=document.getElementById('dailyExpensesList');
     const dateStr=getDateStr(selectedDate);
@@ -458,6 +514,9 @@ function exportCSV(){
     for(const k in expenses){expenses[k].forEach(e=>{csv+=`"Gasto Extra","${k}","${e.desc}","-","-",${e.amountBs||0},${e.rateUsed||''},${e.amountUsd||0}\n`;});}
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`reporte_financiero_chagas_${getDateStr(new Date())}.csv`;a.click();
 }
+
+// Funciones que usaban saveLocalData() en el código original y ahora se manejan directo en Firebase
+function saveLocalData(){ /* Ya no se usa, Firebase guarda automáticamente */ }
 
 window.onload=()=>{
     loadLocalData();
